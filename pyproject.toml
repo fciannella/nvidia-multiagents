@@ -1,0 +1,14 @@
+[project]
+name = "magpie-tts-spark"
+version = "0.1.0"
+description = "Pipecat TTS with self-hosted NVIDIA Riva NIM"
+requires-python = ">=3.10"
+dependencies = [
+    "nvidia-riva-client>=2.21.1",
+    "loguru>=0.7.3",
+    "python-dotenv>=1.0.0",
+    "soundfile>=0.13.1",
+    "numpy>=1.26.4",
+    "pydantic>=2.10.6",
+    "protobuf>=5.29.6",
+]

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+
+# Environment variables / secrets
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio output files
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# Cursor
+.cursor/
+
+# Embedded / reference repos
+nemotron-january-2026/
+pipecat/
+
+# Misc
+TTS
