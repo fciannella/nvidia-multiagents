@@ -23,6 +23,7 @@ from pipecat.frames.frames import (
     Frame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
+    StartInterruptionFrame,
     TextFrame,
     TTSAudioRawFrame,
     TTSStartedFrame,
@@ -61,6 +62,7 @@ class Qwen3TTSService(FrameProcessor):
         self._total_chunks: int = 0
         self._text_full: str = ""
         self._client: Optional[httpx.AsyncClient] = None
+        self._interrupted = False
 
     async def _ensure_client(self):
         if self._client is None:
@@ -90,6 +92,10 @@ class Qwen3TTSService(FrameProcessor):
                 leftover = b""
 
                 async for chunk in resp.aiter_bytes():
+                    if self._interrupted:
+                        logger.debug(f"[Q3-TTS] Interrupted mid-stream")
+                        return
+
                     data = leftover + chunk
 
                     if not header_skipped:
@@ -121,6 +127,9 @@ class Qwen3TTSService(FrameProcessor):
                             num_channels=1,
                         ))
 
+                if self._interrupted:
+                    return
+
                 if leftover:
                     if len(leftover) % 2:
                         leftover += b"\x00"
@@ -141,6 +150,8 @@ class Qwen3TTSService(FrameProcessor):
         """Wait for the previous TTS task to finish, then run ours."""
         if prev is not None:
             await prev
+        if self._interrupted:
+            return
         await self._stream_tts(text, label)
 
     def _enqueue_sentence(self, text: str):
@@ -165,10 +176,18 @@ class Qwen3TTSService(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, LLMFullResponseStartFrame):
+        if isinstance(frame, StartInterruptionFrame):
+            self._interrupted = True
+            if self._tts_chain and not self._tts_chain.done():
+                self._tts_chain.cancel()
+                logger.debug("[Q3-TTS] Cancelled TTS chain on interruption")
+            await self.push_frame(frame, direction)
+
+        elif isinstance(frame, LLMFullResponseStartFrame):
             self._buffer = ""
             self._sentence_idx = 0
             self._tts_chain = None
+            self._interrupted = False
             self._t0 = time.perf_counter()
             self._first_audio = True
             self._total_bytes = 0

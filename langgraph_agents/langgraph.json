@@ -1,0 +1,9 @@
+{
+  "graphs": {
+    "chitchat": "./agents/chitchat.py:graph",
+    "router": "./agents/router.py:graph",
+    "worker": "./agents/worker.py:graph"
+  },
+  "dependencies": ["./requirements.txt"],
+  "env": ".env"
+}

@@ -1,5 +1,7 @@
 FROM fciannella/vllm-build:1.0.0
 
+COPY nano_v3_reasoning_parser.py /vllm-workspace/nano_v3_reasoning_parser.py
+
 COPY scripts/launch_nemotron.sh /app/launch_nemotron.sh
 RUN chmod +x /app/launch_nemotron.sh
 
