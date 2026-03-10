@@ -37,5 +37,8 @@ nemotron-january-2026/
 pipecat/
 langgraph/
 
+# LangGraph local state
+.langgraph_api/
+
 # Misc
 TTS

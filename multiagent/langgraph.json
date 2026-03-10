@@ -1,0 +1,9 @@
+{
+  "dependencies": ["./requirements.txt"],
+  "graphs": {
+    "orchestrator": "./src/graph.py:graph",
+    "ds_executor": "./src/executor.py:ds_executor_graph",
+    "it_executor": "./src/executor.py:it_executor_graph"
+  },
+  "env": ".env"
+}
