@@ -43,3 +43,17 @@ services:
       - TTS_SERVER=${TTS_SERVER:-http://192.168.7.163:8100}
       - ASSEMBLYAI_LANGUAGE=${ASSEMBLYAI_LANGUAGE:-multi}
     restart: unless-stopped
+
+  # ── Pipeline 4: Generic Dual-Thread Agent ──────────────────────────
+  generic:
+    build: .
+    command: ["/app/docker/entrypoint-generic.sh"]
+    ports:
+      - "7865:7860"
+    env_file:
+      - .env
+    environment:
+      - LANGGRAPH_URL=http://localhost:2024
+      - MAGPIE_TTS_SERVER=${MAGPIE_TTS_SERVER:-192.168.7.203:9000}
+      - ASSEMBLYAI_LANGUAGE=${ASSEMBLYAI_LANGUAGE:-multi}
+    restart: unless-stopped

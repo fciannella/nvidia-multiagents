@@ -13,6 +13,7 @@ RUN apt-get update && \
 COPY pyproject.toml ./
 COPY multiagent/requirements.txt multiagent/requirements.txt
 COPY react_agent/requirements.txt react_agent/requirements.txt
+COPY generic_agent/requirements.txt generic_agent/requirements.txt
 
 RUN pip install --no-cache-dir \
     "pipecat-ai[silero,webrtc]>=0.0.104" \
@@ -20,7 +21,8 @@ RUN pip install --no-cache-dir \
     fastapi uvicorn httpx websockets aiohttp \
     sse-starlette loguru python-dotenv pydantic numpy soundfile \
     -r multiagent/requirements.txt \
-    -r react_agent/requirements.txt
+    -r react_agent/requirements.txt \
+    -r generic_agent/requirements.txt
 
 COPY . .
 

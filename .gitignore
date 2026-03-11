@@ -40,6 +40,9 @@ langgraph/
 # LangGraph local state
 .langgraph_api/
 
+# Documentation (local only)
+docs/
+
 # Archived code
 archived/
 
