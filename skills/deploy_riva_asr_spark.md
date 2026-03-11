@@ -3,7 +3,7 @@ Username: $oauthtoken
 Password: <PASTE_API_KEY_HERE>
 
 
-export NGC_API_KEY=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
+export NGC_API_KEY=<your key>
 
 docker run -it --rm --name=parakeet-1-1b-rnnt-multilingual \
    --gpus all \

@@ -15,7 +15,7 @@ COPY multiagent/requirements.txt multiagent/requirements.txt
 COPY react_agent/requirements.txt react_agent/requirements.txt
 
 RUN pip install --no-cache-dir \
-    "pipecat-ai[silero,smallwebrtc]>=0.0.104" \
+    "pipecat-ai[silero,webrtc]>=0.0.104" \
     "langgraph-cli[inmem]>=0.4" \
     fastapi uvicorn httpx websockets aiohttp \
     sse-starlette loguru python-dotenv pydantic numpy soundfile \
