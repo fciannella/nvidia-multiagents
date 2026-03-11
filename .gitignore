@@ -43,6 +43,9 @@ langgraph/
 # Archived code
 archived/
 
+# Test pipelines
+test-pipelines/
+
 # Standalone utility scripts
 scripts/
 
