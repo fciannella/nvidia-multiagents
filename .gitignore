@@ -40,5 +40,11 @@ langgraph/
 # LangGraph local state
 .langgraph_api/
 
+# Archived code
+archived/
+
+# Standalone utility scripts
+scripts/
+
 # Misc
 TTS
