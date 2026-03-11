@@ -67,7 +67,6 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from react_agent_service import ReactAgentService
 from qwen3_tts import Qwen3TTSService
-import starter_matcher
 
 
 class TextStreamCapture(FrameProcessor):
@@ -124,12 +123,6 @@ pcs_map: Dict[str, SmallWebRTCConnection] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("[startup] Pre-building starter matcher index...")
-    starter_matcher.build_index()
-    asyncio.create_task(
-        starter_matcher.presynthesize(TTS_VOICE, TTS_SERVER, TTS_LANGUAGE)
-    )
-    logger.info("[startup] Starter index ready, audio pre-synth in background")
     yield
     coros = [pc.disconnect() for pc in pcs_map.values()]
     await asyncio.gather(*coros)
