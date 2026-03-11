@@ -54,6 +54,6 @@ services:
       - .env
     environment:
       - LANGGRAPH_URL=http://localhost:2024
-      - MAGPIE_TTS_SERVER=${MAGPIE_TTS_SERVER:-192.168.7.203:9000}
+      - TTS_SERVER=${TTS_SERVER:-http://192.168.7.163:8100}
       - ASSEMBLYAI_LANGUAGE=${ASSEMBLYAI_LANGUAGE:-multi}
     restart: unless-stopped

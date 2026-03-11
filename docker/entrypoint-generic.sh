@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# langgraph.json references ../env — create it from the container's
+# environment so langgraph dev doesn't fail on a missing file.
+# The real env vars are injected by docker-compose env_file.
+touch /app/.env
+
 echo "=== Starting LangGraph server (generic_agent) ==="
 cd /app/generic_agent
 langgraph dev --no-browser --n-jobs-per-worker 10 --host 0.0.0.0 --port 2024 &
