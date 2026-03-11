@@ -1,0 +1,8 @@
+{
+  "graphs": {
+    "front_agent": "./agents/front_agent.py:graph",
+    "executor": "./agents/executor.py:graph"
+  },
+  "dependencies": ["./requirements.txt"],
+  "env": "../.env"
+}

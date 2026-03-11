@@ -41,6 +41,11 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+try:
+    from multiagent.voice.frames import VoiceSwitchFrame
+except ImportError:
+    VoiceSwitchFrame = None
+
 
 def _make_event(event_type: str, **kwargs) -> str:
     return json.dumps({
@@ -56,7 +61,7 @@ class RivaNimRealtimeTTSService(FrameProcessor):
     def __init__(
         self,
         *,
-        server: str = "192.168.7.163:9000",
+        server: str = "192.168.7.203:9000",
         voice_id: str = "Magpie-Multilingual.EN-US.Aria",
         language: str = "en-US",
         sample_rate: int = 24000,
@@ -84,6 +89,12 @@ class RivaNimRealtimeTTSService(FrameProcessor):
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    def set_voice(self, voice_id: str):
+        """Switch the TTS voice for subsequent sessions."""
+        if voice_id != self._voice_id:
+            logger.info(f"[RT-TTS] Voice changed: {self._voice_id} → {voice_id}")
+            self._voice_id = voice_id
 
     async def _open_session(self):
         """Open WebSocket and configure the synthesis session."""
@@ -142,31 +153,20 @@ class RivaNimRealtimeTTSService(FrameProcessor):
         we send input_text.done and exit.  This prevents Riva from aborting
         unprocessed commits due to a premature done signal.
         """
-        IDLE_TIMEOUT = 8.0
+        RECV_TIMEOUT = 30.0
 
         try:
             leftover = b""
-            done_sent = False
 
             while True:
-                use_timeout = (
-                    IDLE_TIMEOUT if self._all_committed.is_set() and not done_sent
-                    else None
-                )
                 try:
-                    raw = await asyncio.wait_for(self._ws.recv(), timeout=use_timeout)
+                    raw = await asyncio.wait_for(
+                        self._ws.recv(), timeout=RECV_TIMEOUT
+                    )
                 except asyncio.TimeoutError:
-                    if not done_sent:
-                        logger.info(
-                            f"[RT-TTS] Audio idle for {IDLE_TIMEOUT}s after all commits, "
-                            f"sending input_text.done"
-                        )
-                        try:
-                            await self._ws.send(_make_event("input_text.done"))
-                        except Exception:
-                            pass
-                        done_sent = True
-                        continue
+                    logger.warning(
+                        f"[RT-TTS] No data for {RECV_TIMEOUT}s, closing session"
+                    )
                     break
 
                 msg = json.loads(raw)
@@ -182,6 +182,7 @@ class RivaNimRealtimeTTSService(FrameProcessor):
                             f"[RT-TTS] TTFB={ttfb:.0f}ms "
                             f"first_chunk={len(audio_bytes)}B"
                         )
+                        await self.push_frame(TTSStartedFrame())
 
                     pcm = leftover + audio_bytes
                     usable = len(pcm) - (len(pcm) % 2)
@@ -206,7 +207,7 @@ class RivaNimRealtimeTTSService(FrameProcessor):
                         f"synth={meta.get('synthesis_time_ms', '?')}ms "
                         f"audio_dur={meta.get('audio_duration_ms', '?')}ms"
                     )
-                    if done_sent and is_last:
+                    if is_last:
                         break
 
                 elif etype == "input_text.committed":
@@ -255,7 +256,6 @@ class RivaNimRealtimeTTSService(FrameProcessor):
                 return
 
             self._recv_task = asyncio.create_task(self._recv_audio_loop())
-            await self.push_frame(TTSStartedFrame())
             await self.push_frame(frame, direction)
 
         elif isinstance(frame, TextFrame) and self._ws:
@@ -295,9 +295,10 @@ class RivaNimRealtimeTTSService(FrameProcessor):
                         f"({len(self._uncommitted)} chars): "
                         f"[{self._uncommitted.strip()[:60]}]"
                     )
+                await self._ws.send(_make_event("input_text.done"))
                 logger.info(
                     f"[RT-TTS] All text sent: {self._commits} commits, "
-                    f"recv loop will send done after audio drains"
+                    f"input_text.done sent immediately"
                 )
             except Exception as e:
                 logger.error(f"[RT-TTS] Finalize error: {e}")
@@ -319,9 +320,26 @@ class RivaNimRealtimeTTSService(FrameProcessor):
                 f"text=[{self._text_buffer[:100]}...]"
             )
 
+            playback_remaining = audio_dur - elapsed
+            if playback_remaining > 0.2:
+                logger.info(
+                    f"[RT-TTS] Waiting {playback_remaining:.1f}s for audio "
+                    f"playback to finish (audio={audio_dur:.1f}s, "
+                    f"elapsed={elapsed:.1f}s)"
+                )
+                await asyncio.sleep(playback_remaining)
+
             await self.push_frame(TTSStoppedFrame())
             await self._close_session()
             await self.push_frame(frame, direction)
+
+        elif VoiceSwitchFrame is not None and isinstance(frame, VoiceSwitchFrame):
+            old = self._voice_id
+            self._voice_id = frame.voice
+            if old != frame.voice:
+                logger.info(
+                    f"[RT-TTS] Voice switched (in-queue): {old} → {frame.voice}"
+                )
 
         elif isinstance(frame, (EndFrame, CancelFrame)):
             await self._close_session()

@@ -17,8 +17,9 @@ from pydantic import BaseModel, Field
 
 from config import get_router_llm
 from tools.mock_tools import get_available_tools
+from tools.telco_tools import TELCO_TOOL_DESCRIPTIONS
 
-_TOOLS = get_available_tools()
+_TOOLS = get_available_tools() + TELCO_TOOL_DESCRIPTIONS
 TOOL_LIST = "\n".join(
     f"- {t['name']}: {t['description']} (~{t['duration_secs']}s)"
     for t in _TOOLS
