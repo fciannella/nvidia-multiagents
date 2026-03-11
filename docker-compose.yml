@@ -1,0 +1,45 @@
+services:
+
+  # ── Pipeline 1: Multi-Agent + Magpie TTS (recommended) ──────────────
+  magpie:
+    build: .
+    command: ["/app/docker/entrypoint-magpie.sh"]
+    ports:
+      - "7871:7860"
+    env_file:
+      - .env
+      - multiagent/.env
+    environment:
+      - LANGGRAPH_URL=http://localhost:2024
+      - MAGPIE_TTS_SERVER=${MAGPIE_TTS_SERVER:-192.168.7.203:9000}
+      - ASSEMBLYAI_LANGUAGE=${ASSEMBLYAI_LANGUAGE:-multi}
+    restart: unless-stopped
+
+  # ── Pipeline 2: Multi-Agent + Qwen3 TTS ─────────────────────────────
+  qwen3:
+    build: .
+    command: ["/app/docker/entrypoint-qwen3.sh"]
+    ports:
+      - "7870:7860"
+    env_file:
+      - .env
+      - multiagent/.env
+    environment:
+      - LANGGRAPH_URL=http://localhost:2024
+      - TTS_SERVER=${TTS_SERVER:-http://192.168.7.163:8100}
+      - ASSEMBLYAI_LANGUAGE=${ASSEMBLYAI_LANGUAGE:-multi}
+    restart: unless-stopped
+
+  # ── Pipeline 3: Single-Agent ReAct ──────────────────────────────────
+  react:
+    build: .
+    command: ["/app/docker/entrypoint-react.sh"]
+    ports:
+      - "7863:7860"
+    env_file:
+      - .env
+    environment:
+      - LANGGRAPH_URL=http://localhost:2024
+      - TTS_SERVER=${TTS_SERVER:-http://192.168.7.163:8100}
+      - ASSEMBLYAI_LANGUAGE=${ASSEMBLYAI_LANGUAGE:-multi}
+    restart: unless-stopped

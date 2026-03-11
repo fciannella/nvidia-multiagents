@@ -1,6 +1,6 @@
 """LLM configuration for the multi-agent orchestrator.
 
-All agents use Nemotron via local vLLM for speed.
+All agents use the same LLM endpoint (configurable per-role).
 Environment variables allow overriding per-agent.
 """
 
@@ -53,33 +53,21 @@ def get_router_model() -> ChatOpenAI:
     )
 
 
-def get_data_scientist_model() -> ChatOpenAI:
-    base_url = os.getenv("MA_DS_BASE_URL", "")
+def get_agent_model() -> ChatOpenAI:
+    """Get the LLM for any agent's responses. All agents share the same model."""
+    base_url = os.getenv(
+        "MA_AGENT_BASE_URL",
+        os.getenv("MA_DS_BASE_URL", ""),
+    )
     is_openrouter = "openrouter" in base_url
     return _build_llm(
-        base_url_key="MA_DS_BASE_URL",
-        model_key="MA_DS_MODEL",
+        base_url_key="MA_AGENT_BASE_URL" if os.getenv("MA_AGENT_BASE_URL") else "MA_DS_BASE_URL",
+        model_key="MA_AGENT_MODEL" if os.getenv("MA_AGENT_MODEL") else "MA_DS_MODEL",
         api_key_key="OPENROUTER_API_KEY" if is_openrouter else "",
         temperature=0.7,
         max_tokens=512,
     )
 
 
-def get_it_agent_model() -> ChatOpenAI:
-    base_url = os.getenv("MA_IT_BASE_URL", "")
-    is_openrouter = "openrouter" in base_url
-    return _build_llm(
-        base_url_key="MA_IT_BASE_URL",
-        model_key="MA_IT_MODEL",
-        api_key_key="OPENROUTER_API_KEY" if is_openrouter else "",
-        temperature=0.7,
-        max_tokens=512,
-    )
-
-
-def get_ds_name() -> str:
-    return os.getenv("MA_DS_NAME", "Sarah")
-
-
-def get_it_name() -> str:
-    return os.getenv("MA_IT_NAME", "Mike")
+def get_scenario_id() -> str:
+    return os.getenv("MA_SCENARIO", "ecommerce")

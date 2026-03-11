@@ -1,0 +1,12 @@
+.venv/
+.git/
+.env
+archived/
+test-pipelines/
+pipelines/
+scripts/
+*.pyc
+__pycache__/
+.langgraph_api/
+*.pckl
+.cursor/

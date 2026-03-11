@@ -61,7 +61,14 @@ INVOKE_NODES = {"invoke_agent"}
 
 @dataclass
 class VoiceMap:
-    """Maps agent speaker IDs to TTS voice names."""
+    """Maps agent speaker IDs to TTS voice names.
+
+    Works with any number of agents — backed by a simple dict.
+    Legacy fields (data_scientist, it) are kept for backward compat
+    but the dict-based ``voices`` is the canonical source.
+    """
+
+    voices: dict[str, str] = field(default_factory=dict)
 
     data_scientist: str = field(
         default_factory=lambda: os.getenv("MA_DS_VOICE", "qwen3-data-scientist-demo-en-en")
@@ -70,12 +77,22 @@ class VoiceMap:
         default_factory=lambda: os.getenv("MA_IT_VOICE", "qwen3-male-it-expert-en")
     )
 
+    def __post_init__(self):
+        if not self.voices:
+            self.voices = {
+                "data_scientist": self.data_scientist,
+                "it": self.it,
+            }
+
     def get(self, speaker: str) -> str:
-        if speaker == "data_scientist":
-            return self.data_scientist
-        if speaker == "it":
-            return self.it
+        if speaker in self.voices:
+            return self.voices[speaker]
+        if self.voices:
+            return next(iter(self.voices.values()))
         return self.data_scientist
+
+    def set(self, speaker: str, voice: str):
+        self.voices[speaker] = voice
 
 
 class LangGraphProcessor(FrameProcessor):
@@ -89,6 +106,7 @@ class LangGraphProcessor(FrameProcessor):
         langgraph_url: Optional[str] = None,
         graph_name: str = "orchestrator",
         voice_map: Optional[VoiceMap] = None,
+        scenario_id: str = "ecommerce",
         tts=None,
         **kwargs,
     ):
@@ -96,6 +114,7 @@ class LangGraphProcessor(FrameProcessor):
         self._url = langgraph_url or os.getenv("LANGGRAPH_URL", "http://localhost:2024")
         self._graph_name = graph_name
         self._voice_map = voice_map or VoiceMap()
+        self._scenario_id = scenario_id
         self._tts = tts
         self._client = None
         self._thread_id: Optional[str] = None
@@ -274,7 +293,7 @@ class LangGraphProcessor(FrameProcessor):
         stream = self._client.runs.stream(
             self._thread_id,
             self._graph_name,
-            input={"human_input": human_input},
+            input={"human_input": human_input, "scenario_id": self._scenario_id},
             stream_mode=["messages", "updates"],
             multitask_strategy="interrupt",
         )
@@ -425,13 +444,11 @@ class LangGraphProcessor(FrameProcessor):
                 "started_at": time.perf_counter(),
             }
 
-            executor_graph = (
-                "ds_executor" if agent == "data_scientist" else "it_executor"
-            )
+            executor_graph = "executor"
 
             logger.info(
                 f"[EXECUTOR] Starting {executor_graph} tool={executor_tool} "
-                f"task_id={task_id}"
+                f"agent={agent} scenario={self._scenario_id} task_id={task_id}"
             )
 
             self._current_response_executor_ids.append(task_id)
@@ -464,6 +481,8 @@ class LangGraphProcessor(FrameProcessor):
                 assistant_id=executor_graph,
                 input={
                     "session_id": self._session_id,
+                    "scenario_id": self._scenario_id,
+                    "agent": agent,
                     "tool_name": tool_name,
                     "tool_args": tool_args,
                 },
@@ -567,9 +586,7 @@ class LangGraphProcessor(FrameProcessor):
         try:
             result = await self._client.runs.wait(
                 thread_id,
-                assistant_id=(
-                    "ds_executor" if agent == "data_scientist" else "it_executor"
-                ),
+                assistant_id="executor",
                 command=Command(resume=answer),
             )
             await self._handle_executor_result(task_id, agent, thread_id, result)
@@ -644,7 +661,7 @@ class LangGraphProcessor(FrameProcessor):
             stream = self._client.runs.stream(
                 self._thread_id,
                 self._graph_name,
-                input={"human_input": status_msg},
+                input={"human_input": status_msg, "scenario_id": self._scenario_id},
                 stream_mode=["messages", "updates"],
                 multitask_strategy="interrupt",
             )

@@ -1,6 +1,0 @@
-langgraph>=0.4
-langgraph-checkpoint>=2.0
-langchain-openai>=0.3
-langchain-core>=0.3
-python-dotenv
-loguru

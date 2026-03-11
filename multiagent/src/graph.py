@@ -1,11 +1,11 @@
 """Orchestrator StateGraph: routes human messages and invokes agents.
 
-All routing decisions are made by the router LLM via structured output.
-No rule-based overrides — the router decides primary, secondary, topic,
-and whether tools are allowed.
+Fully scenario-driven — the active scenario is passed via ``scenario_id``
+in the graph input.  Routing decisions, agent prompts, tool binding, and
+handoff logic all read from the scenario config at runtime.
 
 After every agent turn, a lightweight handoff check runs (while TTS plays)
-to decide if the other agent should respond next.  The loop is bounded by
+to decide if another agent should respond next.  The loop is bounded by
 ``max_turns`` (default 4) so conversations stay focused.
 
 Agents generate plain text (NOT structured output) so that LangGraph can
@@ -20,18 +20,11 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langgraph.graph import END, START, StateGraph
 from loguru import logger
 
-from src.config import (
-    get_data_scientist_model,
-    get_ds_name,
-    get_it_agent_model,
-    get_it_name,
-    get_router_model,
-)
+from src.config import get_agent_model, get_router_model, get_scenario_id
 from src.models import HandoffCheck, ProjectPlan, RoutingDecision
-from src.prompts import get_data_scientist_prompt, get_it_agent_prompt, get_router_prompt
-from src.tools.ds_tools import DS_ALL_TOOLS, DS_LAUNCHER_TO_EXECUTOR
-from src.tools.it_tools import IT_ALL_TOOLS, IT_LAUNCHER_TO_EXECUTOR
-from src.utils import format_context, to_langchain_messages
+from src.prompts import get_agent_prompt, get_router_prompt
+from src.scenarios import ScenarioConfig, get_scenario
+from src.utils import format_context, get_agent_labels, to_langchain_messages
 
 MAX_TOOL_ROUNDS = 3
 MAX_CONVERSATION_TURNS = 4
@@ -43,10 +36,12 @@ MAX_CONVERSATION_TURNS = 4
 
 class InputState(TypedDict):
     human_input: str
+    scenario_id: str
 
 
 class State(TypedDict):
     human_input: str
+    scenario_id: str
     messages: Annotated[list[dict], operator.add]
     project_plan: dict
     routing: dict
@@ -57,50 +52,49 @@ class State(TypedDict):
     tool_launches: list[dict]
 
 
+def _get_scenario(state: State) -> ScenarioConfig:
+    sid = state.get("scenario_id") or get_scenario_id()
+    return get_scenario(sid)
+
+
 # ---------------------------------------------------------------------------
 # Agent invocation (plain text, NOT structured output)
 # ---------------------------------------------------------------------------
 
-def _invoke_agent(state: State, agent: str, hint: str | None = None) -> dict:
+def _invoke_agent(state: State, agent_id: str, hint: str | None = None) -> dict:
     """Call the specified agent, optionally with tool-calling (ReAct loop).
 
     Tool binding is controlled by the router's ``tools_allowed`` flag.
-    When tools are disabled the agent answers from its knowledge only.
     """
     t0 = time.perf_counter()
+
+    scenario = _get_scenario(state)
+    agent_cfg = scenario.get_agent(agent_id)
+    labels = get_agent_labels(scenario)
 
     messages = state.get("messages", [])
     plan_dict = state.get("project_plan") or ProjectPlan().model_dump()
     plan_text = ProjectPlan(**plan_dict).summary()
 
-    lc_messages = to_langchain_messages(messages, perspective=agent)
+    lc_messages = to_langchain_messages(messages, perspective=agent_id, agent_labels=labels)
     if hint:
         lc_messages.append(HumanMessage(content=f"[Context: {hint}]"))
 
-    ds_name = get_ds_name()
-    it_name = get_it_name()
-
-    if agent == "data_scientist":
-        model = get_data_scientist_model()
-        system_prompt = get_data_scientist_prompt(ds_name, it_name, plan_text)
-        tools = DS_ALL_TOOLS
-        launcher_map = DS_LAUNCHER_TO_EXECUTOR
-    else:
-        model = get_it_agent_model()
-        system_prompt = get_it_agent_prompt(ds_name, it_name, plan_text)
-        tools = IT_ALL_TOOLS
-        launcher_map = IT_LAUNCHER_TO_EXECUTOR
+    model = get_agent_model()
+    system_prompt = get_agent_prompt(scenario, agent_id, plan_text)
+    tools = agent_cfg.all_tools
+    launcher_map = agent_cfg.launcher_to_executor
 
     tools_allowed = state.get("routing", {}).get("tools_allowed", False)
 
-    if tools_allowed:
+    if tools_allowed and tools:
         tool_map = {t.name: t for t in tools}
         active_model = model.bind_tools(tools)
-        logger.info(f"[REACT] {agent} tools=enabled")
+        logger.info(f"[REACT] {agent_id} tools=enabled ({len(tools)} tools)")
     else:
         tool_map = {}
         active_model = model
-        logger.info(f"[REACT] {agent} tools=disabled (router decision)")
+        logger.info(f"[REACT] {agent_id} tools=disabled")
 
     full_messages = [SystemMessage(content=system_prompt)] + lc_messages
     tool_launches: list[dict] = []
@@ -114,7 +108,7 @@ def _invoke_agent(state: State, agent: str, hint: str | None = None) -> dict:
         tool_calls = getattr(result, "tool_calls", None) or []
 
         logger.info(
-            f"[REACT] {agent} round={round_idx} "
+            f"[REACT] {agent_id} round={round_idx} "
             f"invoke={((t_done - t_invoke) * 1000):.0f}ms "
             f"tool_calls={[tc['name'] for tc in tool_calls]} "
             f"text_len={len(text)}"
@@ -131,7 +125,7 @@ def _invoke_agent(state: State, agent: str, hint: str | None = None) -> dict:
             tool_fn = tool_map.get(tool_name)
 
             if tool_fn is None:
-                logger.warning(f"[REACT] {agent} unknown tool: {tool_name}")
+                logger.warning(f"[REACT] {agent_id} unknown tool: {tool_name}")
                 full_messages.append(
                     ToolMessage(
                         content=f"Error: unknown tool '{tool_name}'",
@@ -143,7 +137,7 @@ def _invoke_agent(state: State, agent: str, hint: str | None = None) -> dict:
             t_tool = time.perf_counter()
             tool_result = tool_fn.invoke(tool_args)
             logger.info(
-                f"[REACT] {agent} tool={tool_name} "
+                f"[REACT] {agent_id} tool={tool_name} "
                 f"exec={((time.perf_counter() - t_tool) * 1000):.0f}ms "
                 f"result={str(tool_result)[:120]}"
             )
@@ -157,30 +151,28 @@ def _invoke_agent(state: State, agent: str, hint: str | None = None) -> dict:
 
             if tool_name in launcher_map:
                 tool_launches.append({
-                    "agent": agent,
+                    "agent": agent_id,
                     "launcher_tool": tool_name,
                     "executor_tool": launcher_map[tool_name],
                     "args": tool_args,
                 })
     else:
         logger.warning(
-            f"[REACT] {agent} hit max tool rounds ({MAX_TOOL_ROUNDS})"
+            f"[REACT] {agent_id} hit max tool rounds ({MAX_TOOL_ROUNDS})"
         )
 
     text = result.content if hasattr(result, "content") else str(result)
     total_ms = (time.perf_counter() - t0) * 1000
 
     logger.info(
-        f"[TIMING] {agent} total={total_ms:.0f}ms "
+        f"[TIMING] {agent_id} total={total_ms:.0f}ms "
         f"tokens≈{len(text.split())} "
         f"tools_called={len(tool_launches)} "
         f"text=[{text[:80]}...]"
     )
 
-    new_msg = {"speaker": agent, "text": text}
-
     return {
-        "messages": [new_msg],
+        "messages": [{"speaker": agent_id, "text": text}],
         "turn_count": state.get("turn_count", 0) + 1,
         "tool_launches": tool_launches,
     }
@@ -191,21 +183,19 @@ def _invoke_agent(state: State, agent: str, hint: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 def route(state: State) -> dict:
-    """Classify the human message via the router LLM (structured output).
-
-    The router is the SOLE decision maker for:
-    - Which agent(s) should respond
-    - Whether tools are allowed
-    - The conversation topic
-    """
+    """Classify the human message via the router LLM (structured output)."""
     t0 = time.perf_counter()
+
+    scenario = _get_scenario(state)
+    labels = get_agent_labels(scenario)
+    agent_ids = scenario.agent_ids
 
     text = state["human_input"]
     messages = state.get("messages", [])
 
-    context = format_context(messages)
+    context = format_context(messages, agent_labels=labels)
     lc_messages = [
-        SystemMessage(content=get_router_prompt(get_ds_name(), get_it_name())),
+        SystemMessage(content=get_router_prompt(scenario)),
         HumanMessage(content=f"Context: {context}\nMessage: \"{text}\"\nRoute:"),
     ]
 
@@ -221,9 +211,9 @@ def route(state: State) -> dict:
     primary = routing["primary_agent"]
     secondary = routing.get("secondary_agent", "none")
 
-    if primary not in ("data_scientist", "it"):
-        primary = "data_scientist"
-    if secondary not in ("data_scientist", "it"):
+    if primary not in agent_ids:
+        primary = agent_ids[0]
+    if secondary not in agent_ids:
         secondary = ""
     if secondary == primary:
         secondary = ""
@@ -233,7 +223,19 @@ def route(state: State) -> dict:
 
     topic = routing.get("topic", "general")
     tools_allowed = routing.get("tools_allowed", False)
-    max_turns = MAX_CONVERSATION_TURNS
+
+    intro_keywords = {"intro", "greet", "hello", "who are you", "meet", "yoursel"}
+    is_intro = any(kw in topic.lower() for kw in intro_keywords) or any(
+        kw in text.lower() for kw in {"introduce", "who are you", "yourselves"}
+    )
+    if is_intro and secondary:
+        max_turns = 2
+        logger.info("[ROUTE] Introduction detected — capping at 2 turns")
+    elif not secondary:
+        max_turns = 2
+        logger.info("[ROUTE] Single-agent routing — capping at 2 turns")
+    else:
+        max_turns = MAX_CONVERSATION_TURNS
 
     logger.info(
         f"[TIMING] router invoke={((t_done - t_invoke) * 1000):.0f}ms "
@@ -260,8 +262,11 @@ def route(state: State) -> dict:
 
 def invoke_agent(state: State) -> dict:
     """Invoke whichever agent is in ``next_agent``."""
-    agent = state["next_agent"]
+    agent_id = state["next_agent"]
     turn_count = state.get("turn_count", 0)
+
+    scenario = _get_scenario(state)
+    labels = get_agent_labels(scenario)
 
     hint = None
     if turn_count > 0:
@@ -273,9 +278,7 @@ def invoke_agent(state: State) -> dict:
                 break
 
         if last_speaker:
-            ds_name = get_ds_name()
-            it_name = get_it_name()
-            last_name = ds_name if last_speaker == "data_scientist" else it_name
+            last_name = labels.get(last_speaker, last_speaker)
             max_t = state.get("max_turns", MAX_CONVERSATION_TURNS)
 
             is_last_turn = (turn_count + 1) >= max_t
@@ -306,25 +309,18 @@ def invoke_agent(state: State) -> dict:
             else:
                 hint = base
 
-    logger.info(f"[TIMING] invoke_agent start agent={agent} turn={turn_count}")
-    result = _invoke_agent(state, agent, hint=hint)
+    logger.info(f"[TIMING] invoke_agent start agent={agent_id} turn={turn_count}")
+    result = _invoke_agent(state, agent_id, hint=hint)
 
     queued = state.get("queued_secondary", "")
-    if queued and queued == agent:
+    if queued and queued == agent_id:
         result["queued_secondary"] = ""
 
     return result
 
 
 def check_handoff(state: State) -> dict:
-    """Decide whether another agent should speak next.
-
-    Runs after EVERY agent turn (while TTS plays the current response).
-    Checks in order:
-    1. Turn limit reached → stop
-    2. Router pre-queued a secondary that hasn't spoken → invoke them
-    3. LLM handoff check on the last speaker's text → invoke other if needed
-    """
+    """Decide whether another agent should speak next."""
     turn_count = state.get("turn_count", 0)
     max_turns = state.get("max_turns", MAX_CONVERSATION_TURNS)
 
@@ -336,6 +332,10 @@ def check_handoff(state: State) -> dict:
     if queued:
         logger.info(f"[HANDOFF-CHECK] Router pre-queued secondary={queued}")
         return {"next_agent": queued}
+
+    scenario = _get_scenario(state)
+    labels = get_agent_labels(scenario)
+    agent_ids = scenario.agent_ids
 
     messages = state.get("messages", [])
     last_speaker = ""
@@ -349,22 +349,35 @@ def check_handoff(state: State) -> dict:
     if not last_text:
         return {"next_agent": ""}
 
-    ds_name = get_ds_name()
-    it_name = get_it_name()
-    other_agent = "it" if last_speaker == "data_scientist" else "data_scientist"
-    other_name = it_name if last_speaker == "data_scientist" else ds_name
-    speaker_name = ds_name if last_speaker == "data_scientist" else it_name
+    other_agents = [aid for aid in agent_ids if aid != last_speaker]
+    if not other_agents:
+        return {"next_agent": ""}
+
+    other_agent = other_agents[0]
+    other_name = labels.get(other_agent, other_agent)
+    speaker_name = labels.get(last_speaker, last_speaker)
+
+    human_text = state.get("human_input", "")
+    routing = state.get("routing", {})
+    router_had_secondary = bool(routing.get("secondary_agent", ""))
 
     prompt = (
-        f"{speaker_name} just responded.\n"
+        f'The user said: "{human_text}"\n'
+        f"The router decided ONLY {speaker_name} should respond"
+        + (f" (no secondary agent was set).\n\n" if not router_had_secondary
+           else f", with {other_name} as secondary.\n\n")
+        + f"{speaker_name} just responded:\n"
+        f'"{last_text[:500]}"\n\n'
         f"Should {other_name} ({other_agent}) speak next?\n\n"
-        f'{speaker_name}\'s response: "{last_text[:500]}"\n\n'
-        f"Set should_speak=true if {speaker_name}:\n"
-        f"- Asked {other_name} a direct question\n"
-        f"- Referenced a task/status in {other_name}'s domain that the user "
-        f"would benefit from hearing about\n"
-        f"- Mentioned a dependency that {other_name} can address\n\n"
-        f"Set should_speak=false if the response is self-contained.\n"
+        f"RULES (follow strictly):\n"
+        f"- If the user addressed {speaker_name} specifically (by name, or "
+        f"using 'you' as a follow-up), set should_speak=false — the user "
+        f"wants to hear from {speaker_name}, not {other_name}.\n"
+        f"- If {speaker_name}'s response is self-contained and doesn't ask "
+        f"{other_name} a direct question, set should_speak=false.\n"
+        f"- Set should_speak=true ONLY if {speaker_name} asked {other_name} "
+        f"a direct question OR explicitly deferred to {other_name}.\n"
+        f"- When in doubt, set should_speak=false.\n\n"
         f"Set tools_allowed=true only if {other_name} needs real-time data "
         f"to answer (e.g., check cluster status, GPU usage)."
     )
